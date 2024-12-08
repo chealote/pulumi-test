@@ -5,6 +5,9 @@ using System.Linq;
 using Pulumi;
 using Aws = Pulumi.Aws;
 
+// TODO create a separate function to list the metadata from the ddb
+// table
+
 return await Deployment.RunAsync(() =>
 {
   var role = new Aws.Iam.Role("role", new()
@@ -29,6 +32,27 @@ return await Deployment.RunAsync(() =>
     {
       Aws.Iam.ManagedPolicy.AWSLambdaBasicExecutionRole.ToString(),
     },
+  });
+
+  var ddbPolicy = new Aws.Iam.RolePolicy("AllowToPutItemInAnyDDBTable", new Aws.Iam.RolePolicyArgs
+  {
+    Role = role.Id,
+      Policy = JsonSerializer.Serialize(new Dictionary<string, object?>
+      {
+        ["Version"] = "2012-10-17",
+        ["Statement"] = new[]
+        {
+          new Dictionary<string, object?>
+          {
+            ["Action"] = new[]
+            {
+              "dynamodb:PutItem",
+            },
+            ["Effect"] = "Allow",
+            ["Resource"] = "arn:aws:dynamodb:*:*:*",
+            },
+        },
+      })
   });
 
   var policyString = JsonSerializer.Serialize(new Dictionary<string, object?>
@@ -65,6 +89,34 @@ return await Deployment.RunAsync(() =>
     Code = new FileArchive("src/"),
     Handler = "main.lambda_handler",
     Role = role.Arn
+  });
+
+  var s3FilesMetadataTable = new Aws.DynamoDB.Table("S3FilesMetadata", new()
+  {
+    Name = "S3FilesMetadata",
+    BillingMode = "PROVISIONED",
+    ReadCapacity = 1,
+    WriteCapacity = 1,
+    HashKey = "Name",
+    RangeKey = "Value",
+    Attributes = new[]
+    {
+      new Aws.DynamoDB.Inputs.TableAttributeArgs
+      {
+        Name = "Name",
+        Type = "S",
+      },
+      new Aws.DynamoDB.Inputs.TableAttributeArgs
+      {
+        Name = "Value",
+        Type = "S",
+      },
+    },
+    Ttl = new Aws.DynamoDB.Inputs.TableTtlArgs
+    {
+      AttributeName = "TimeToExist",
+      Enabled = true,
+    },
   });
 
   var b = new Aws.S3.Bucket("CheAloteItsABucket", new()
@@ -104,7 +156,6 @@ return await Deployment.RunAsync(() =>
       allowBucket,
     },
   });
-
 
   return new Dictionary<string, object?>
     {
