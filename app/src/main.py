@@ -1,16 +1,18 @@
 import json
+import boto3
+
+s3_client = boto3.client("s3")
 
 def lambda_handler(event, context):
-    print(event)
-    print(context)
-    if event is not None and \
-       'stageVariables' in event and \
-       'STAGE' in event['stageVariables']:
-            return {
-                "statusCode": 200,
-                "body": f"Hello world from {event['stageVariables']['STAGE']}!"
-            }
+    print("event:", event)
+    all_metas = []
+    for record in event["Records"]:
+        bucket_name = record["s3"]["bucket"]["name"]
+        object_name = record["s3"]["object"]["key"]
+        metadata = s3_client.head_object(Bucket=bucket_name, Key=object_name)
+        print(metadata)
+        all_metas.append(metadata["Metadata"])
     return {
         "statusCode": 200,
-        "body": f"Hello world! No info for stage, sorry..."
+        "body": json.dumps(all_metas)
     }

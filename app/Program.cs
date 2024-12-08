@@ -1,171 +1,113 @@
-﻿using Pulumi;
-using System.Collections.Generic;
-using Pulumi.Aws.Iam;
+﻿using System.Text.Json;
 using Pulumi.Aws.Lambda;
+using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
+using Pulumi;
 using Aws = Pulumi.Aws;
-using AwsApiGateway = Pulumi.AwsApiGateway;
 
 return await Deployment.RunAsync(() =>
 {
-    var role = new Aws.Iam.Role("role", new()
+  var role = new Aws.Iam.Role("role", new()
+  {
+    AssumeRolePolicy = JsonSerializer.Serialize(new Dictionary<string, object?>
     {
-        AssumeRolePolicy = JsonSerializer.Serialize(new Dictionary<string, object?>
+      ["Version"] = "2012-10-17",
+      ["Statement"] = new[]
+      {
+        new Dictionary<string, object?>
         {
-            ["Version"] = "2012-10-17",
-            ["Statement"] = new[]
-            {
-                new Dictionary<string, object?>
-                {
-                    ["Action"] = "sts:AssumeRole",
-                    ["Effect"] = "Allow",
-                    ["Principal"] = new Dictionary<string, object?>
-                    {
-                        ["Service"] = "lambda.amazonaws.com",
-                    },
-                },
-            },
-        }),
-        ManagedPolicyArns = new[]
-        {
-            Aws.Iam.ManagedPolicy.AWSLambdaBasicExecutionRole.ToString(),
-        },
-    });
-
-    var lambda = new Function("test", new FunctionArgs
-    {
-        Runtime = "python3.9",
-        Code = new FileArchive("src/"),
-        Handler = "main.lambda_handler",
-        Role = role.Arn
-    });
-
-    var api = new AwsApiGateway.RestAPI("api", new()
-    {
-        Routes =
-        {
-            new AwsApiGateway.Inputs.RouteArgs
-            {
-                Path = "/",
-                Method = AwsApiGateway.Method.GET,
-                EventHandler = lambda,
+          ["Action"] = "sts:AssumeRole",
+          ["Effect"] = "Allow",
+          ["Principal"] = new Dictionary<string, object?>
+          {
+            ["Service"] = "lambda.amazonaws.com",
             },
         },
-    });
-
-    // how to get the name of the api here?
-    var apiLog = new Aws.CloudWatch.LogGroup("dev", new()
+      },
+    }),
+    ManagedPolicyArns = new[]
     {
-        Name = "apigw-dev",
-        RetentionInDays = 1,
-    });
+      Aws.Iam.ManagedPolicy.AWSLambdaBasicExecutionRole.ToString(),
+    },
+  });
 
-    var deploy = new Aws.ApiGateway.Deployment("dev", new()
+  var policyString = JsonSerializer.Serialize(new Dictionary<string, object?>
     {
-        RestApi = api.Api.Apply(api => api.Id),
-    });
-
-    var devStage = new Aws.ApiGateway.Stage("dev", new()
-    {
-        Deployment = deploy.Id,
-        RestApi = api.Api.Apply(api => api.Id),
-        StageName = "dev",
-        Variables = new Dictionary<string,string>
+      ["Version"] = "2012-10-17",
+      ["Statement"] = new[]
+      {
+        new Dictionary<string, object?>
         {
-            {"STAGE", "dev"}
-        },
+          ["Action"] = new[]
+          {
+            "s3:GetObject",
+          },
+          ["Effect"] = "Allow",
+          ["Resource"] = "*",
+          },
+      },
     });
 
-    var prodStage = new Aws.ApiGateway.Stage("prod", new()
+  var policy = new Aws.Iam.Policy("GetObjectToAllResourcesInS3", new()
+  {
+    PolicyDocument = policyString,
+  });
+
+  var policyAttachment = new Aws.Iam.RolePolicyAttachment("lambda-policy-attachment", new Aws.Iam.RolePolicyAttachmentArgs
+  {
+    Role = role.Name,
+    PolicyArn = policy.Arn
+  });
+
+  var function = new Function("TriggerBucketUpload", new FunctionArgs
+  {
+    Runtime = "python3.9",
+    Code = new FileArchive("src/"),
+    Handler = "main.lambda_handler",
+    Role = role.Arn
+  });
+
+  var b = new Aws.S3.Bucket("CheAloteItsABucket", new()
+  {
+    Acl = Aws.S3.CannedAcl.Private,
+  });
+
+  var allowBucket = new Aws.Lambda.Permission("allow_bucket", new()
+  {
+    StatementId = "AllowExecutionFromS3Bucket",
+    Action = "lambda:InvokeFunction",
+    Function = function.Arn,
+    Principal = "s3.amazonaws.com",
+    SourceArn = b.Arn,
+  });
+
+  var bn = new Aws.S3.BucketNotification("ItsABucketNotification", new()
+  {
+    Bucket = b.Id,
+    LambdaFunctions = new[]
     {
-        Deployment = deploy.Id,
-        RestApi = api.Api.Apply(api => api.Id),
-        StageName = "prod",
-        Variables = new Dictionary<string,string>
+      new Aws.S3.Inputs.BucketNotificationLambdaFunctionArgs
+      {
+        LambdaFunctionArn = function.Arn,
+        Events = new[]
         {
-            {"STAGE", "prod"}
+          "s3:ObjectCreated:*",
         },
-    });
-
-    var permission = new Aws.Lambda.Permission("allowApiGateway", new ()
+        FilterPrefix = "",
+        FilterSuffix = "",
+      },
+    },
+  }, new CustomResourceOptions
+  {
+    DependsOn =
     {
-        StatementId = "AllowExecutionFromApiGateway",
-        Action = "lambda:InvokeFunction",
-        Function = lambda.Name,
-        Principal = "apigateway.amazonaws.com",
-    });
+      allowBucket,
+    },
+  });
 
-    return new Dictionary<string, object?>
+
+  return new Dictionary<string, object?>
     {
-        ["devUrl"] = devStage.InvokeUrl,
-        ["prodUrl"] = prodStage.InvokeUrl,
+        ["policyIWantToCreate"] = policyString,
     };
 });
-
-/*
-    var someTable = new Aws.DynamoDB.Table("AnotherTable", new()
-    {
-        Name = "AnotherTable",
-        BillingMode = "PROVISIONED",
-        ReadCapacity = 1,
-        WriteCapacity = 1,
-        HashKey = "UserId",
-        RangeKey = "GameTitle",
-        Attributes = new[]
-        {
-            new Aws.DynamoDB.Inputs.TableAttributeArgs
-            {
-                Name = "UserId",
-                Type = "S",
-            },
-            new Aws.DynamoDB.Inputs.TableAttributeArgs
-            {
-                Name = "GameTitle",
-                Type = "S",
-            },
-            new Aws.DynamoDB.Inputs.TableAttributeArgs
-            {
-                Name = "TopScore",
-                Type = "N",
-            },
-        },
-        Ttl = new Aws.DynamoDB.Inputs.TableTtlArgs
-        {
-            AttributeName = "TimeToExist",
-            Enabled = true,
-        },
-        LocalSecondaryIndexes = new[]
-        {
-            new Aws.DynamoDB.Inputs.TableLocalSecondaryIndexArgs
-            {
-                Name = "TopScore",
-                ProjectionType = "KEYS_ONLY",
-                RangeKey = "TopScore",
-            },
-        },
-        Tags =
-        {
-            { "Name", "someTable" },
-            { "Environment", "dev" },
-        },
-    });
-    var ddbPolicy = new RolePolicy("customDynamoDbAccess", new RolePolicyArgs
-    {
-        Role = lambdaRole.Id,
-        Policy =
-            @"{
-            ""Version"": ""2012-10-17"",
-            ""Statement"": [{
-                ""Effect"": ""Allow"",
-                ""Action"": [
-                    ""dynamodb:PutItem"",
-                    ""dynamodb:GetItem""
-                ],
-                ""Resource"": ""arn:aws:dynamodb:*:*:*""
-            }]
-        }"
-    });
-
-*/
-
