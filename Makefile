@@ -4,12 +4,15 @@ credentials_file=credentials
 config_file=config
 project_name=app
 count:=$(shell sudo docker ps | grep $(name) | wc -l)
+pulumi_access_token=$(shell cat token.txt)
 
 .PHONY: all
 all: build run
 
 build:
-	sudo docker build -t $(name):$(tag) .
+	sudo docker build \
+		--build-arg BUILD_PULUMI_ACCESS_TOKEN=$(pulumi_access_token) \
+		-t $(name):$(tag) .
 	touch build
 
 .PHONY: run
