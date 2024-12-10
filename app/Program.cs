@@ -47,6 +47,7 @@ return await Deployment.RunAsync(() =>
             ["Action"] = new[]
             {
               "dynamodb:PutItem",
+              "dynamodb:Scan", // TODO split policy into put and get for each function
             },
             ["Effect"] = "Allow",
             ["Resource"] = "arn:aws:dynamodb:*:*:*",
@@ -83,10 +84,18 @@ return await Deployment.RunAsync(() =>
     PolicyArn = policy.Arn
   });
 
-  var function = new Function("TriggerBucketUpload", new FunctionArgs
+  var putItemFunction = new Function("TriggerBucketUpload", new FunctionArgs
   {
     Runtime = "python3.9",
-    Code = new FileArchive("src/"),
+    Code = new FileArchive("put-item-src/"),
+    Handler = "main.lambda_handler",
+    Role = role.Arn
+  });
+
+  var getItemFunction = new Function("GetItemMetadata", new FunctionArgs
+  {
+    Runtime = "python3.9",
+    Code = new FileArchive("get-item-src/"),
     Handler = "main.lambda_handler",
     Role = role.Arn
   });
@@ -128,7 +137,7 @@ return await Deployment.RunAsync(() =>
   {
     StatementId = "AllowExecutionFromS3Bucket",
     Action = "lambda:InvokeFunction",
-    Function = function.Arn,
+    Function = putItemFunction.Arn,
     Principal = "s3.amazonaws.com",
     SourceArn = b.Arn,
   });
@@ -140,7 +149,7 @@ return await Deployment.RunAsync(() =>
     {
       new Aws.S3.Inputs.BucketNotificationLambdaFunctionArgs
       {
-        LambdaFunctionArn = function.Arn,
+        LambdaFunctionArn = putItemFunction.Arn,
         Events = new[]
         {
           "s3:ObjectCreated:*",
